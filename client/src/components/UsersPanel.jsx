@@ -105,7 +105,7 @@ export default function UsersPanel(){
             </select>
             <button
               onClick={createUser}
-              className="px-4 py-2 rounded-xl bg-brand-600 text-white hover:bg-brand-700"
+              className="px-4 py-2 rounded-xl font-bold bg-neutral-100  hover:bg-neutral-200"
             >
               Crear
             </button>
@@ -167,7 +167,7 @@ export default function UsersPanel(){
                             <button
                               onClick={()=>saveRow(u)}
                               disabled={!usernameVal?.trim()}
-                              className="px-3 py-1.5 rounded-lg bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50"
+                              className="px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 disabled:opacity-50"
                             >
                               Guardar
                             </button>

@@ -37,9 +37,6 @@ npm run dev
 ```
 El frontend inicia en `http://localhost:5173/` por defecto.
 
-### Credenciales de prueba (seed)
-- **admin** / `Admin123!`
-- **empleado** / `Empleado123!`
 
 ## Scripts disponibles
 - Backend:
