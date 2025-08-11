@@ -110,27 +110,23 @@ setInterval(async () => {
   }
 }, 5000)
 
-// ─── RUTA BOOTSTRAP (TEMPORAL) PARA CREAR ADMIN ───────────────────────────────
 app.post('/__bootstrap/create-admin', async (req, res) => {
   try {
     const { username, password } = req.body || {};
-    const token = req.query.token;
+    const provided = String(req.query.token || '').trim();
+    const expected = String(process.env.ADMIN_BOOTSTRAP_TOKEN || '').trim();
 
-    if (!process.env.ADMIN_BOOTSTRAP_TOKEN) {
-      return res.status(500).json({ error: 'ADMIN_BOOTSTRAP_TOKEN no configurado' });
-    }
-    if (token !== process.env.ADMIN_BOOTSTRAP_TOKEN) {
-      return res.status(403).json({ error: 'Token inválido' });
-    }
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Faltan username/password' });
-    }
+    if (!expected) return res.status(500).json({ error: 'ADMIN_BOOTSTRAP_TOKEN no configurado' });
+    if (provided !== expected) return res.status(403).json({ error: 'Token inválido' });
+    if (!username || !password) return res.status(400).json({ error: 'Faltan username/password' });
 
     const hash = await bcrypt.hash(password, 10);
+
+    // ⬇⬇ Usa passwordHash en lugar de password
     const user = await prisma.user.upsert({
       where: { username },
-      update: { password: hash, role: 'ADMIN', isActive: true },
-      create: { username, password: hash, role: 'ADMIN', isActive: true },
+      update: { passwordHash: hash, role: 'ADMIN', isActive: true },
+      create: { username, passwordHash: hash, role: 'ADMIN', isActive: true },
     });
 
     res.json({ ok: true, id: user.id, username: user.username });
