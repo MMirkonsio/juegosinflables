@@ -4,6 +4,7 @@ import http from 'http'
 import { Server as IOServer } from 'socket.io'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import bcrypt from 'bcryptjs';
 
 import authRouter from './routes/auth.js'
 import sessionsRouter from './routes/sessions.js'
@@ -108,6 +109,36 @@ setInterval(async () => {
     await prisma.auditLog.create({ data: { action: 'SESSION_EXPIRED', sessionId: s.id } })
   }
 }, 5000)
+
+// ─── RUTA BOOTSTRAP (TEMPORAL) PARA CREAR ADMIN ───────────────────────────────
+app.post('/__bootstrap/create-admin', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    const token = req.query.token;
+
+    if (!process.env.ADMIN_BOOTSTRAP_TOKEN) {
+      return res.status(500).json({ error: 'ADMIN_BOOTSTRAP_TOKEN no configurado' });
+    }
+    if (token !== process.env.ADMIN_BOOTSTRAP_TOKEN) {
+      return res.status(403).json({ error: 'Token inválido' });
+    }
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Faltan username/password' });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.upsert({
+      where: { username },
+      update: { password: hash, role: 'ADMIN', isActive: true },
+      create: { username, password: hash, role: 'ADMIN', isActive: true },
+    });
+
+    res.json({ ok: true, id: user.id, username: user.username });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Error creando admin' });
+  }
+});
 
 /* ----------------------------- Start ------------------------------- */
 const PORT = process.env.PORT || 4000
