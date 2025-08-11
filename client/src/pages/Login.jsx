@@ -1,7 +1,9 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import api from "../api.js";
 import { saveAuth } from "../auth.js";
 import { useNavigate } from "react-router-dom";
+import hero from '../img/imagen.png';
+
 
 export default function Login() {
   const [username, setUsername] = useState("");
@@ -10,9 +12,6 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const navigate = useNavigate();
-
-  const hero =
-    "./src/img/imagen.png"; // cámbiala si quieres
 
   const onSubmit = async (e) => {
     e.preventDefault();
