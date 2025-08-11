@@ -29,6 +29,7 @@ client/.env.*
 server/.env
 server/.env.*
 !server/.env.example
+vite.config.js
 
 # === Prisma (si usas SQLite en dev) ===
 prisma/dev.db

@@ -110,31 +110,7 @@ setInterval(async () => {
   }
 }, 5000)
 
-app.post('/__bootstrap/create-admin', async (req, res) => {
-  try {
-    const { username, password } = req.body || {};
-    const provided = String(req.query.token || '').trim();
-    const expected = String(process.env.ADMIN_BOOTSTRAP_TOKEN || '').trim();
 
-    if (!expected) return res.status(500).json({ error: 'ADMIN_BOOTSTRAP_TOKEN no configurado' });
-    if (provided !== expected) return res.status(403).json({ error: 'Token inválido' });
-    if (!username || !password) return res.status(400).json({ error: 'Faltan username/password' });
-
-    const hash = await bcrypt.hash(password, 10);
-
-    // ⬇⬇ Usa passwordHash en lugar de password
-    const user = await prisma.user.upsert({
-      where: { username },
-      update: { passwordHash: hash, role: 'ADMIN', isActive: true },
-      create: { username, passwordHash: hash, role: 'ADMIN', isActive: true },
-    });
-
-    res.json({ ok: true, id: user.id, username: user.username });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Error creando admin' });
-  }
-});
 
 /* ----------------------------- Start ------------------------------- */
 const PORT = process.env.PORT || 4000
