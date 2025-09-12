@@ -21,40 +21,33 @@ router.get("/", async (req, res) => {
 });
 
 // Create session (ADMIN only)
-router.post("/", async (req, res) => {
-  const user = req.user;
-  if (user.role !== "ADMIN") return res.status(403).json({ error: "Forbidden" });
+router.post('/', async (req, res) => {
+  const user = req.user
+  const { childName, durationMinutes = 15, notes } = req.body
 
-  const { childName, durationMinutes, notes } = req.body;
-  if (!childName) return res.status(400).json({ error: "childName requerido" });
-
-  let duration = parseInt(durationMinutes ?? 0, 10);
-  if (!duration || duration <= 0) {
-    const setting = await prisma.setting.findUnique({ where: { id: 1 } });
-    duration = setting?.defaultDurationMinutes ?? 15;
+  if (!childName || !durationMinutes) {
+    return res.status(400).json({ error: 'Faltan datos' })
   }
 
-  const startTime = nowUtc();
-  const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+  const start = new Date()
+  const end = new Date(start.getTime() + durationMinutes * 60 * 1000)
 
   const created = await prisma.session.create({
     data: {
       childName,
-      durationMinutes: duration,
-      startTime,
-      endTime,
+      durationMinutes,
       notes: notes || null,
+      status: 'RUNNING',
+      startTime: start,
+      endTime: end,
       createdById: user.id,
     },
-  });
+  })
 
-  await prisma.auditLog.create({
-    data: { action: "SESSION_CREATED", userId: user.id, sessionId: created.id },
-  });
+  emitToDashboards('session:created', created)
+  res.json(created)
+})
 
-  emitToDashboards("session:created", created);
-  res.status(201).json(created);
-});
 
 // Update session (ADMIN)
 router.patch("/:id", async (req, res) => {
@@ -113,11 +106,16 @@ router.post("/:id/confirm-exit", async (req, res) => {
 // DELETE /sessions/:id  (hard delete en BD, cualquier estado)
 router.delete('/:id', async (req, res) => {
   const user = req.user
-  if (user.role !== 'ADMIN') return res.status(403).json({ error: 'Forbidden' })
 
   const { id } = req.params
   const existing = await prisma.session.findUnique({ where: { id } })
   if (!existing) return res.status(404).json({ error: 'No existe' })
+
+  // Permite si es ADMIN o si la creó el mismo empleado
+  const isOwner = existing.createdById === user.id
+  if (user.role !== 'ADMIN' && !isOwner) {
+    return res.status(403).json({ error: 'Forbidden' })
+  }
 
   await prisma.session.delete({ where: { id } })
   emitToDashboards('session:deleted', { id })
@@ -128,21 +126,26 @@ router.delete('/:id', async (req, res) => {
 // POST /sessions/:id/pause
 router.post('/:id/pause', async (req, res) => {
   const user = req.user
-  if (user.role !== 'ADMIN') return res.status(403).json({ error: 'Forbidden' })
-
   const { id } = req.params
-  const now = new Date()
-  const s = await prisma.session.findUnique({ where: { id } })
-  if (!s) return res.status(404).json({ error: 'No existe' })
-  if (s.status !== 'RUNNING') return res.status(400).json({ error: 'Solo se puede pausar si está RUNNING' })
 
-  const remaining = Math.max(0, Math.ceil((s.endTime.getTime() - now.getTime()) / 1000)) // seg
+  const existing = await prisma.session.findUnique({ where: { id } })
+  if (!existing) return res.status(404).json({ error: 'No existe' })
+
+  const isOwner = existing.createdById === user.id
+  if (user.role !== 'ADMIN' && !isOwner) {
+    return res.status(403).json({ error: 'Forbidden' })
+  }
+
+  if (existing.status !== 'RUNNING') {
+    return res.status(400).json({ error: 'Solo se puede pausar una sesión en curso' })
+  }
+
+  const now = new Date()
+  const remaining = Math.max(0, Math.floor((new Date(existing.endTime) - now) / 1000))
+
   const updated = await prisma.session.update({
     where: { id },
-    data: {
-      status: 'PAUSED',
-      remainingSeconds: remaining,
-    },
+    data: { status: 'PAUSED', remainingSeconds: remaining }
   })
 
   emitToDashboards('session:updated', updated)
@@ -153,25 +156,25 @@ router.post('/:id/pause', async (req, res) => {
 // POST /sessions/:id/resume
 router.post('/:id/resume', async (req, res) => {
   const user = req.user
-  if (user.role !== 'ADMIN') return res.status(403).json({ error: 'Forbidden' })
-
   const { id } = req.params
-  const s = await prisma.session.findUnique({ where: { id } })
-  if (!s) return res.status(404).json({ error: 'No existe' })
-  if (s.status !== 'PAUSED' || !s.remainingSeconds) {
-    return res.status(400).json({ error: 'Solo se puede reanudar si está PAUSED' })
+
+  const existing = await prisma.session.findUnique({ where: { id } })
+  if (!existing) return res.status(404).json({ error: 'No existe' })
+
+  const isOwner = existing.createdById === user.id
+  if (user.role !== 'ADMIN' && !isOwner) {
+    return res.status(403).json({ error: 'Forbidden' })
   }
 
-  const now = Date.now()
-  const newEnd = new Date(now + s.remainingSeconds * 1000)
+  if (existing.status !== 'PAUSED' || !Number.isFinite(existing.remainingSeconds)) {
+    return res.status(400).json({ error: 'La sesión no está en pausa' })
+  }
+
+  const newEnd = new Date(Date.now() + existing.remainingSeconds * 1000)
 
   const updated = await prisma.session.update({
     where: { id },
-    data: {
-      status: 'RUNNING',
-      endTime: newEnd,
-      remainingSeconds: null,
-    },
+    data: { status: 'RUNNING', endTime: newEnd, remainingSeconds: null }
   })
 
   emitToDashboards('session:updated', updated)
