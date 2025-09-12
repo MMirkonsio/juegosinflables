@@ -90,9 +90,10 @@ app.get('/health', (_req, res) => res.json({ ok: true }))
 app.get('/time', (_req, res) => res.json({ serverTime: Date.now() }))
 
 app.use('/auth', authRouter)
-app.use('/sessions', authorize(), sessionsRouter)
-app.use('/users', authorize('ADMIN'), usersRouter)
+app.use('/sessions', authorize(), sessionsRouter)      // empleados y admin
+app.use('/users', authorize('ADMIN'), usersRouter)     // solo admin
 app.use('/settings', authorize('ADMIN'), settingsRouter)
+
 
 /* ----------------------- Job de expiración ------------------------- */
 setInterval(async () => {

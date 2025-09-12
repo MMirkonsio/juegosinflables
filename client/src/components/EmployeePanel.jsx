@@ -4,7 +4,6 @@ import { socket } from '../socket.js'
 import TimerCard from './TimerCard.jsx'
 import useServerTimeOffset from '../hooks/useServerTimeOffset.js'
 import { Card, CardBody, CardHeader } from './ui/Card.jsx'
-import SessionCard from './SessionCard.jsx'
 import { LuPlus } from "react-icons/lu"
 
 export default function EmployeePanel(){
@@ -12,55 +11,49 @@ export default function EmployeePanel(){
   const offset = useServerTimeOffset()
 
   // === Formulario (mismo patrón que AdminPanel) ===
-  const DEFAULT_DURATION = 15
+ const DEFAULT_DURATION = 15
   const [childName, setChildName] = useState('')
-  const [duration, setDuration] = useState(DEFAULT_DURATION)
+  const [duration, setDuration] = useState(String(DEFAULT_DURATION)) // "15"
   const [notes, setNotes] = useState('')
-  const [settings, setSettings] = useState({ defaultDurationMinutes: DEFAULT_DURATION })
 
-  const load = async ()=>{
-    // Sesiones
-    const { data } = await api.get('/sessions', { params: { _ts: Date.now() } })
-    setSessions(data)
 
-    // Settings (para defaultDuration)
-    try {
-      const s = await api.get('/settings', { params: { _ts: Date.now() } })
-      setSettings(s.data)
-      setDuration(s.data?.defaultDurationMinutes || DEFAULT_DURATION)
-    } catch {
-      // si /settings está protegido para admin, mantenemos DEFAULT_DURATION
-    }
-  }
+    // load: solo sesiones (sin /settings y sin listener extra)
+    useEffect(() => {
+      const load = async () => {
+        const { data } = await api.get('/sessions', { params: { _ts: Date.now() } })
+        setSessions(data)
+      }
+      load()
 
-  useEffect(()=>{
-    load()
-    socket.on('session:created', s=>setSessions(p=>[s,...p]))
-    socket.on('session:updated', s=>setSessions(p=>p.map(x=>x.id===s.id?s:x)))
-    socket.on('session:statusChanged', s=>setSessions(p=>p.map(x=>x.id===s.id?s:x)))
-    socket.on('session:deleted', s=>setSessions(p=>p.filter(x=>x.id!==s.id)))
+      socket.on('session:created', s=>setSessions(p=>[s,...p]))
+      socket.on('session:updated', s=>setSessions(p=>p.map(x=>x.id===s.id?s:x)))
+      socket.on('session:statusChanged', s=>setSessions(p=>p.map(x=>x.id===s.id?s:x)))
+      socket.on('session:deleted', s=>setSessions(p=>p.filter(x=>x.id!==s.id)))
 
-    // escucha cambios de settings (igual que AdminPanel)
-    const onSettingsUpdated = (e)=> {
-      const cfg = e.detail
-      setSettings(cfg)
-      if (cfg?.defaultDurationMinutes) setDuration(cfg.defaultDurationMinutes)
-    }
-    window.addEventListener('settings:updated', onSettingsUpdated)
+      return ()=>{
+        socket.off('session:created'); socket.off('session:updated')
+        socket.off('session:statusChanged'); socket.off('session:deleted')
+      }
+    }, [])
 
-    return ()=>{
-      socket.off('session:created'); socket.off('session:updated')
-      socket.off('session:statusChanged'); socket.off('session:deleted')
-      window.removeEventListener('settings:updated', onSettingsUpdated)
-    }
-  },[])
+    // crear: arma payload SIN durationMinutes si no es válido
+   const createSession = async () => {
+  if (!childName.trim()) return
+  let d = parseInt(duration, 10)
+  if (!Number.isFinite(d) || d <= 0) d = DEFAULT_DURATION   // fallback a 15
 
-  // === Acciones ===
-  const createSession = async () => {
-    if (!childName.trim()) return
-    await api.post('/sessions', { childName, durationMinutes: Number(duration), notes })
-    setChildName(''); setNotes('')
-  }
+  await api.post('/sessions', {
+    childName: childName.trim(),
+    durationMinutes: d,
+    notes
+  })
+
+  setChildName('')
+  setNotes('')
+  setDuration(String(DEFAULT_DURATION)) // volver a 15 tras crear
+}
+
+
   const confirmExit = async (id) => { await api.post(`/sessions/${id}/confirm-exit`) }
   const pauseSession  = async (id) => { await api.post(`/sessions/${id}/pause`) }
   const resumeSession = async (id) => { await api.post(`/sessions/${id}/resume`) }
@@ -86,13 +79,17 @@ export default function EmployeePanel(){
               value={childName}
               onChange={e=>setChildName(e.target.value)}
             />
-            <input
-              type="number"
-              min="1"
-              className="px-3 py-2 rounded-xl border border-slate-300"
-              value={duration}
-              onChange={e=>setDuration(parseInt(e.target.value||'0',10))}
-            />
+         <input
+            type="number"
+            min="1"
+            className="px-3 py-2 rounded-xl border border-slate-300"
+            value={duration}
+            onChange={e => setDuration(e.target.value)}
+            onBlur={() => { if (!duration) setDuration(String(DEFAULT_DURATION)) }} // <- vuelve a 15 si quedó vacío
+            placeholder="(por defecto 15)"
+          />
+
+
             <input
               className="px-3 py-2 rounded-xl border border-slate-300"
               placeholder="Notas (opcional)"

@@ -20,22 +20,29 @@ router.get("/", async (req, res) => {
   res.json(sessions);
 });
 
-// Create session (ADMIN only)
+// Create session (employees + admin)
 router.post('/', async (req, res) => {
   const user = req.user
-  const { childName, durationMinutes = 15, notes } = req.body
+  const { childName, durationMinutes, notes } = req.body
 
-  if (!childName || !durationMinutes) {
+  if (!childName || !childName.trim()) {
     return res.status(400).json({ error: 'Faltan datos' })
   }
 
+  // Normaliza duración: body -> settings -> 15
+  let duration = parseInt(durationMinutes ?? '', 10)
+  if (!Number.isFinite(duration) || duration <= 0) {
+    const setting = await prisma.setting.findUnique({ where: { id: 1 } })
+    duration = setting?.defaultDurationMinutes ?? 15
+  }
+
   const start = new Date()
-  const end = new Date(start.getTime() + durationMinutes * 60 * 1000)
+  const end = new Date(start.getTime() + duration * 60 * 1000)  // <-- usa duration
 
   const created = await prisma.session.create({
     data: {
-      childName,
-      durationMinutes,
+      childName: childName.trim(),
+      durationMinutes: duration,                                  // <-- usa duration
       notes: notes || null,
       status: 'RUNNING',
       startTime: start,
@@ -47,6 +54,7 @@ router.post('/', async (req, res) => {
   emitToDashboards('session:created', created)
   res.json(created)
 })
+
 
 
 // Update session (ADMIN)
@@ -106,20 +114,27 @@ router.post("/:id/confirm-exit", async (req, res) => {
 // DELETE /sessions/:id  (hard delete en BD, cualquier estado)
 router.delete('/:id', async (req, res) => {
   const user = req.user
+  if (!user?.id) return res.status(401).json({ error: 'Unauthorized' })
 
   const { id } = req.params
-  const existing = await prisma.session.findUnique({ where: { id } })
+  const existing = await prisma.session.findUnique({
+    where: { id },
+    select: { id: true }
+  })
   if (!existing) return res.status(404).json({ error: 'No existe' })
 
-  // Permite si es ADMIN o si la creó el mismo empleado
-  const isOwner = existing.createdById === user.id
-  if (user.role !== 'ADMIN' && !isOwner) {
+  // Permitir a ADMIN y EMPLOYEE borrar cualquier registro
+  if (user.role !== 'ADMIN' && user.role !== 'EMPLOYEE') {
     return res.status(403).json({ error: 'Forbidden' })
   }
 
-  await prisma.session.delete({ where: { id } })
-  emitToDashboards('session:deleted', { id })
-  res.json({ ok: true, id })
+  await prisma.session.delete({ where: { id: existing.id } })
+
+  // (Opcional) auditoría
+  // await prisma.auditLog.create({ data: { action: 'SESSION_DELETED', userId: user.id, sessionId: existing.id } })
+
+  emitToDashboards('session:deleted', { id: existing.id })
+  return res.json({ ok: true, id: existing.id })
 })
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Badge from './ui/Badge.jsx'
 import { LuCalendarCheck, LuCalendarX } from 'react-icons/lu'
 import { IoMdMore } from "react-icons/io";
@@ -20,49 +20,64 @@ export default function TimerCard({
   onResume,
   onDelete
 }){
-  const startDate = new Date(session.startTime)
-  const endDate   = new Date(session.endTime)
+  // Memoiza fechas y timestamps (¡no objetos Date en deps!)
+  const startTs = useMemo(() => new Date(session.startTime).getTime(), [session.startTime])
+  const endTs   = useMemo(() => new Date(session.endTime).getTime(),   [session.endTime])
+  const startDate = useMemo(() => new Date(startTs), [startTs])
+  const endDate   = useMemo(() => new Date(endTs),   [endTs])
 
-  // ⏱️ reloj base (referencia de tiempo del servidor)
+  // Reloj
   const [now, setNow] = useState(() => Date.now() + serverOffset)
+  const tickRef = useRef(null)
 
-  // 🧊 restante congelado mientras está en pausa
+  // Restante congelado en pausa
   const [pausedRemainingMs, setPausedRemainingMs] = useState(null)
 
-  // Cuando entra a PAUSED, congelo el restante. Cuando sale de PAUSED, limpio.
+  // Cuando entra/sale de PAUSED, congela/limpia restante.
   useEffect(() => {
     if (session.status === 'PAUSED') {
       if (typeof session.remainingSeconds === 'number') {
         setPausedRemainingMs(Math.max(0, session.remainingSeconds * 1000))
       } else {
-        // fallback si backend aún no envía remainingSeconds
-        const ms = Math.max(0, endDate.getTime() - (Date.now() + serverOffset))
+        const ms = Math.max(0, endTs - (Date.now() + serverOffset))
         setPausedRemainingMs(ms)
       }
     } else {
       setPausedRemainingMs(null)
+      // Al salir de pausa o cambiar estado, sincroniza una vez
+      setNow(Date.now() + serverOffset)
     }
-    // evitar salto en el primer frame tras reanudar
-    setNow(Date.now() + serverOffset)
-  }, [session.status, session.remainingSeconds, endDate, serverOffset])
+    // DEPENDENCIAS: evita objetos Date; usa números y valores estables
+  }, [session.status, session.remainingSeconds, endTs, serverOffset])
 
-  // Tick periódico solo si NO está en pausa
+  // Intervalo: corre solo si NO está en pausa
   useEffect(() => {
     if (session.status === 'PAUSED') return
-    const id = setInterval(() => setNow(Date.now() + serverOffset), 300)
-    return () => clearInterval(id)
+    // Limpia previo (por seguridad)
+    if (tickRef.current) clearInterval(tickRef.current)
+
+    tickRef.current = setInterval(() => {
+      setNow(Date.now() + serverOffset)
+    }, 1000)
+
+    return () => {
+      if (tickRef.current) {
+        clearInterval(tickRef.current)
+        tickRef.current = null
+      }
+    }
   }, [serverOffset, session.status])
 
-  // usar congelado SOLO en PAUSED
-  const remaining = useMemo(() => {
+  // Restante (usa congelado si está en pausa)
+  const remainingMs = useMemo(() => {
     if (session.status === 'PAUSED') {
-      return pausedRemainingMs ?? Math.max(0, endDate.getTime() - (Date.now() + serverOffset))
+      return pausedRemainingMs ?? Math.max(0, endTs - (Date.now() + serverOffset))
     }
-    return endDate.getTime() - now
-  }, [pausedRemainingMs, endDate, now, session.status, serverOffset])
+    return Math.max(0, endTs - now)
+  }, [pausedRemainingMs, endTs, now, session.status, serverOffset])
 
   const isExpired = (session.status !== 'RUNNING' && session.status !== 'PAUSED') ||
-                    (session.status !== 'PAUSED' && remaining <= 0)
+                    (session.status !== 'PAUSED' && remainingMs <= 0)
 
   const stateBadge =
     session.status === 'CONFIRMED_EXIT' ? <Badge color="green">TERMINADO</Badge> :
@@ -72,7 +87,7 @@ export default function TimerCard({
 
   const timeOpts = { hour: "2-digit", minute: "2-digit", hour12: false };
 
-  // --- Menú opciones (⋮) ---
+  // Menú
   const [openMenu, setOpenMenu] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -89,7 +104,6 @@ export default function TimerCard({
     setOpenMenu(false)
   }
 
-  // ✅ Confirmación con SweetAlert2 + toast sonner
   const handleDelete = async () => {
     if (!onDelete || deleting) return
     const result = await Swal.fire({
@@ -100,8 +114,8 @@ export default function TimerCard({
       confirmButtonText: 'Sí, eliminar',
       cancelButtonText: 'Cancelar',
       reverseButtons: true,
-      confirmButtonColor: '#e11d48', // rose-600
-      cancelButtonColor: '#0f172a',  // slate-900
+      confirmButtonColor: '#e11d48',
+      cancelButtonColor: '#0f172a',
       focusCancel: true,
     })
     if (!result.isConfirmed) return
@@ -110,7 +124,7 @@ export default function TimerCard({
       setDeleting(true)
       await onDelete(session.id)
       toast.success('Sesión eliminada')
-    } catch (e) {
+    } catch {
       toast.error('No se pudo eliminar. Intenta nuevamente.')
     } finally {
       setDeleting(false)
@@ -183,10 +197,10 @@ export default function TimerCard({
 
       {/* Contador */}
       <div className={`mt-3 text-4xl font-bold tracking-tight ${isExpired ? 'text-rose-600' : 'text-slate-900'}`}>
-        {format(remaining)}
+        {format(remainingMs)}
       </div>
 
-      {session.status === 'EXPIRED_WAITING_CONFIRM' && (
+      {session.status === 'EXPIRED_WAITING_CONFIRM' && onConfirm && (
         <button
           onClick={() => onConfirm(session.id)}
           className="mt-4 w-full sm:w-auto text-sm px-4 py-2 font-bold rounded border border-amber-300 text-amber-900 bg-amber-50 hover:bg-amber-100"
