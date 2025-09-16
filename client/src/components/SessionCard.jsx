@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import Badge from './ui/Badge.jsx'
 import Swal from 'sweetalert2'
 import { toast } from 'sonner'
+import { LuCalendarCheck, LuCalendarX } from 'react-icons/lu'
 
 export default function SessionCard({ session, onEdit, onDelete, isAdmin }){
   const [editing, setEditing] = useState(false)
@@ -17,7 +18,6 @@ export default function SessionCard({ session, onEdit, onDelete, isAdmin }){
 
   const confirmAndDelete = async () => {
     if (!onDelete || deleting) return
-    // Diálogo de confirmación
     const result = await Swal.fire({
       title: '¿Eliminar registro?',
       text: `Se eliminará "${session.childName}" de forma permanente.`,
@@ -30,7 +30,6 @@ export default function SessionCard({ session, onEdit, onDelete, isAdmin }){
       cancelButtonColor: '#0f172a',  // slate-900
       focusCancel: true,
     })
-
     if (!result.isConfirmed) return
 
     try {
@@ -44,23 +43,48 @@ export default function SessionCard({ session, onEdit, onDelete, isAdmin }){
     }
   }
 
+  // Fechas/hora de entrada y salida
+  const start = new Date(session.startTime)
+  const end   = new Date(session.endTime)
+  const timeOpts = { hour: '2-digit', minute: '2-digit', hour12: false }
+
   return (
     <div className="card p-4 sm:p-5 space-y-3">
       {!editing ? (
         <>
           <div className="flex items-center justify-between">
-            <div className="font-semibold text-lg">{session.childName}</div>
+            <div className="font-semibold text-lg capitalize">{session.childName}</div>
             <Badge color={session.status === 'CANCELLED' ? 'slate' : 'green'}>
               {label(session.status)}
             </Badge>
           </div>
 
+          {/* Fila de horas (entrada/salida) */}
+          <div className="flex items-center gap-4 text-sm text-slate-600 mt-1">
+            <div className="flex items-center gap-1">
+              <LuCalendarCheck className="h-4 w-4 shrink-0" />
+              <span className="font-medium tabular-nums">
+                {start.toLocaleTimeString([], timeOpts)}
+              </span>
+            </div>
+            <div className="flex items-center gap-1">
+              <LuCalendarX className="h-4 w-4 shrink-0" />
+              <span className="font-medium tabular-nums">
+                {end.toLocaleTimeString([], timeOpts)}
+              </span>
+            </div>
+          </div>
+
+          {/* Duración y notas */}
           <div className="text-sm text-slate-500">
             Duración: {session.durationMinutes} min
+            {session.notes ? <> · <span className="italic">{session.notes}</span></> : null}
           </div>
 
           {isAdmin && (
             <div className="flex gap-2">
+              {/* Si quieres permitir edición, agrega algún botón para setEditing(true) */}
+              {/* <button onClick={()=>setEditing(true)} className="px-3 py-2 rounded-xl border hover:bg-slate-50">Editar</button> */}
               <button
                 onClick={confirmAndDelete}
                 disabled={deleting}
