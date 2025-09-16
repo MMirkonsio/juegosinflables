@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import api from '../api.js'
 import { socket } from '../socket.js'
 import SessionCard from './SessionCard.jsx'
@@ -66,6 +66,54 @@ export default function AdminPanel(){
   const waiting = sessions.filter(s => s.status==='EXPIRED_WAITING_CONFIRM')
   const finished = sessions.filter(s => s.status==='CONFIRMED_EXIT' || s.status==='CANCELLED')
 
+// --- Historial paginado (20 por página) y agrupado por fecha ---
+const PAGE_SIZE = 20
+const [page, setPage] = useState(1)
+
+// Ordena finalizados por fin DESC
+const finishedSorted = useMemo(() => {
+  return [...finished].sort(
+    (a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime()
+  )
+}, [finished])
+
+// Total páginas
+const totalPages = Math.max(1, Math.ceil(finishedSorted.length / PAGE_SIZE))
+
+// Asegura que la página exista cuando cambia el total
+useEffect(() => {
+  if (page > totalPages) setPage(totalPages)
+}, [page, totalPages])
+
+// Items de la página actual
+const startIdx = (page - 1) * PAGE_SIZE
+const endIdx   = startIdx + PAGE_SIZE
+const finishedPage = finishedSorted.slice(startIdx, endIdx)
+
+// Agrupar por fecha (con offset del servidor si quieres)
+function groupByDateWithOffset(sessions) {
+  return sessions.reduce((acc, s) => {
+    const ts = new Date(s.endTime).getTime() + offset // usa hora "del server"
+    const d  = new Date(ts)
+    const key = d.toLocaleDateString(undefined, {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    })
+    if (!acc[key]) acc[key] = []
+    acc[key].push(s)
+    return acc
+  }, {})
+}
+const finishedByDate = useMemo(() => groupByDateWithOffset(finishedPage), [finishedPage, offset])
+const finishedDates = Object.keys(finishedByDate)
+
+// Controles de paginación
+const canPrev = page > 1
+const canNext = page < totalPages
+const goPrev = () => canPrev && setPage(p => p - 1)
+const goNext = () => canNext && setPage(p => p + 1)
+
+
+
   return (
     <div className="space-y-8">
       <Card>
@@ -113,16 +161,64 @@ export default function AdminPanel(){
         </Card>
       </div>
 
-      <Card>
-        <CardHeader title="Historial reciente" />
-        <CardBody>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {finished.map(s => (
-              <SessionCard key={s.id} session={s} onEdit={updateSession} onDelete={deleteSession} isAdmin />
-            ))}
-          </div>
-        </CardBody>
-      </Card>
+        <Card>
+          <CardHeader title={`Historial (pág. ${page} de ${totalPages})`} />
+          <CardBody>
+            <div className="space-y-6">
+              {finishedPage.length === 0 && (
+                <div className="text-sm text-slate-500">Sin registros</div>
+              )}
+
+              {finishedDates.map(dateLabel => (
+                <div key={dateLabel}>
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-semibold text-slate-700">{dateLabel}</h3>
+                    <span className="text-xs text-slate-500">
+                      {finishedByDate[dateLabel].length} {finishedByDate[dateLabel].length === 1 ? 'persona' : 'personas'}
+                    </span>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {finishedByDate[dateLabel].map(s => (
+                      <SessionCard
+                        key={s.id}
+                        session={s}
+                        onEdit={updateSession}
+                        onDelete={deleteSession}
+                        isAdmin
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+
+              {/* Controles de paginación */}
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  onClick={goPrev}
+                  disabled={!canPrev}
+                  className="px-3 py-1.5 rounded-lg border disabled:opacity-50 hover:bg-slate-50"
+                >
+                  ← Anterior
+                </button>
+
+                <div className="text-sm text-slate-600">
+                  Mostrando {finishedPage.length} de {finishedSorted.length} registros · Página {page} / {totalPages}
+                </div>
+
+                <button
+                  onClick={goNext}
+                  disabled={!canNext}
+                  className="px-3 py-1.5 rounded-lg border disabled:opacity-50 hover:bg-slate-50"
+                >
+                  Siguiente →
+                </button>
+              </div>
+            </div>
+          </CardBody>
+        </Card>
+
+
     </div>
   )
 }
