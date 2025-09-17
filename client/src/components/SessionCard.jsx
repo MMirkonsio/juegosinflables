@@ -59,6 +59,16 @@ export default function SessionCard({ session, onEdit, onDelete, isAdmin }){
             </Badge>
           </div>
 
+        {(session?.createdBy?.username || session?.createdById) && (
+          <div className="text-sm text-slate-600">
+            Registrado por: <span className="font-medium">
+              {session.createdBy?.username ?? session.createdById}
+            </span>
+          </div>
+        )}
+
+
+
           {/* Fila de horas (entrada/salida) */}
           <div className="flex items-center gap-4 text-sm text-slate-600 mt-1">
             <div className="flex items-center gap-1">
