@@ -5,7 +5,7 @@ import SessionCard from './SessionCard.jsx'
 import TimerCard from './TimerCard.jsx'
 import useServerTimeOffset from '../hooks/useServerTimeOffset.js'
 import { Card, CardBody, CardHeader } from './ui/Card.jsx'
-import { LuPlus } from "react-icons/lu";
+import { LuPlus } from "react-icons/lu"
 
 export default function AdminPanel(){
   const [sessions, setSessions] = useState([])
@@ -16,6 +16,7 @@ export default function AdminPanel(){
   const [settings, setSettings] = useState({ defaultDurationMinutes: DEFAULT_DURATION })
   const offset = useServerTimeOffset()
 
+  // --- cargar sesiones + settings ---
   const load = async () => {
     const { data } = await api.get('/sessions', { params: { _ts: Date.now() } })
     setSessions(data)
@@ -27,10 +28,15 @@ export default function AdminPanel(){
 
   useEffect(()=>{
     load()
-    socket.on('session:created', s=>setSessions(prev=>[s, ...prev]))
-    socket.on('session:updated', s=>setSessions(prev=>prev.map(p=>p.id===s.id?s:p)))
-    socket.on('session:statusChanged', s=>setSessions(prev=>prev.map(p=>p.id===s.id?s:p)))
-    socket.on('session:deleted', s=>setSessions(prev=>prev.filter(p=>p.id!==s.id)))
+    const upsert = s => setSessions(prev => {
+      const i = prev.findIndex(p => p.id === s.id)
+      if (i === -1) return [s, ...prev]
+      const copy = [...prev]; copy[i] = s; return copy
+    })
+    socket.on('session:created', upsert)
+    socket.on('session:updated', upsert)
+    socket.on('session:statusChanged', upsert)
+    socket.on('session:deleted', ({id}) => setSessions(prev => prev.filter(p=>p.id!==id)))
 
     const onSettingsUpdated = (e)=> {
       const cfg = e.detail
@@ -40,15 +46,21 @@ export default function AdminPanel(){
     window.addEventListener('settings:updated', onSettingsUpdated)
 
     return ()=>{
-      socket.off('session:created'); socket.off('session:updated')
-      socket.off('session:statusChanged'); socket.off('session:deleted')
+      socket.off('session:created', upsert)
+      socket.off('session:updated', upsert)
+      socket.off('session:statusChanged', upsert)
+      socket.off('session:deleted')
       window.removeEventListener('settings:updated', onSettingsUpdated)
     }
   },[])
 
+  // --- acciones ---
   const createSession = async () => {
     if(!childName.trim()) return
-    await api.post('/sessions', { childName, durationMinutes: duration, notes })
+    const d = Number(duration)
+    const payload = { childName, notes }
+    if (Number.isFinite(d) && d > 0) payload.durationMinutes = d
+    await api.post('/sessions', payload)
     setChildName(''); setNotes('')
   }
   const updateSession = async (id, payload) => { await api.patch(`/sessions/${id}`, payload) }
@@ -57,6 +69,7 @@ export default function AdminPanel(){
   const pauseSession  = async (id) => { await api.post(`/sessions/${id}/pause`) }
   const resumeSession = async (id) => { await api.post(`/sessions/${id}/resume`) }
 
+  // --- listas ---
   const running = sessions.filter(s =>
     s.status === 'RUNNING' || s.status === 'PAUSED' ||
     (new Date(s.endTime).getTime() - (Date.now()+offset))>0
@@ -64,7 +77,7 @@ export default function AdminPanel(){
   const waiting = sessions.filter(s => s.status==='EXPIRED_WAITING_CONFIRM')
   const finished = sessions.filter(s => s.status==='CONFIRMED_EXIT' || s.status==='CANCELLED')
 
-  // --- Helper de clave de fecha (MISMA clave para agrupar y contar) ---
+  // ---- helpers de fecha ----
   function dateKeyFromISO(iso, _offset) {
     const ts = new Date(iso).getTime() + _offset
     const d  = new Date(ts)
@@ -72,19 +85,47 @@ export default function AdminPanel(){
       weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
     })
   }
+  function dayStamp(iso, _offset) {
+    const d = new Date(new Date(iso).getTime() + _offset)
+    d.setHours(0,0,0,0)
+    return d.getTime()
+  }
 
-  // --- Historial paginado (20 por página) y agrupado por fecha ---
+  // ================== GANANCIAS (en tiempo real) ==================
+  const FEE_PER_BLOCK = 2000
+  const BLOCK_MINUTES = 10
+  const fmtCLP = useMemo(
+    () => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP', maximumFractionDigits: 0 }),
+    []
+  )
+
+  // Reglas: se cobra por cada bloque o fracción de 10 min; se suma al crearse.
+  const earningsByDay = useMemo(() => {
+    const map = new Map()
+    for (const s of sessions) {
+      const blocks = Math.max(1, Math.ceil((s?.durationMinutes ?? 0) / BLOCK_MINUTES))
+      const amount = blocks * FEE_PER_BLOCK
+      const stamp = dayStamp(s.startTime, offset)               // cuenta por día de inicio
+      const label = dateKeyFromISO(s.startTime, offset)
+      const prev = map.get(stamp) || { label, amount: 0 }
+      prev.amount += amount
+      map.set(stamp, prev)
+    }
+    return Array.from(map.entries())
+      .sort((a,b) => b[0]-a[0])
+      .map(([,v]) => v)
+  }, [sessions, offset])
+
+  // ================== HISTORIAL (20 por página) ==================
   const PAGE_SIZE = 20
   const [page, setPage] = useState(1)
 
-  // 1) Ordena finalizados por fin DESC
   const finishedSorted = useMemo(() => {
     return [...finished].sort(
       (a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime()
     )
   }, [finished])
 
-  // 2) Conteo GLOBAL por día (toda la lista)
   const countsByDateAll = useMemo(() => {
     return finishedSorted.reduce((acc, s) => {
       const key = dateKeyFromISO(s.endTime, offset)
@@ -93,20 +134,13 @@ export default function AdminPanel(){
     }, {})
   }, [finishedSorted, offset])
 
-  // 3) Total de páginas
   const totalPages = Math.max(1, Math.ceil(finishedSorted.length / PAGE_SIZE))
+  useEffect(() => { if (page > totalPages) setPage(totalPages) }, [page, totalPages])
 
-  // 4) Asegura que la página exista cuando cambia el total
-  useEffect(() => {
-    if (page > totalPages) setPage(totalPages)
-  }, [page, totalPages])
-
-  // 5) Items de la página actual
   const startIdx = (page - 1) * PAGE_SIZE
   const endIdx   = startIdx + PAGE_SIZE
   const finishedPage = finishedSorted.slice(startIdx, endIdx)
 
-  // 6) Agrupar por fecha (sólo página actual) con la misma clave
   const finishedByDate = useMemo(() => {
     return finishedPage.reduce((acc, s) => {
       const key = dateKeyFromISO(s.endTime, offset)
@@ -116,7 +150,6 @@ export default function AdminPanel(){
   }, [finishedPage, offset])
   const finishedDates = Object.keys(finishedByDate)
 
-  // 7) Controles de paginación
   const canPrev = page > 1
   const canNext = page < totalPages
   const goPrev = () => canPrev && setPage(p => p - 1)
@@ -124,6 +157,7 @@ export default function AdminPanel(){
 
   return (
     <div className="space-y-8">
+      {/* Nuevo registro */}
       <Card>
         <CardHeader title="Nuevo Registro" />
         <CardBody>
@@ -157,6 +191,29 @@ export default function AdminPanel(){
         </CardBody>
       </Card>
 
+      {/* Ganancias (en vivo) */}
+      <Card>
+        <CardHeader title="Ganancias" />
+        <CardBody>
+          {earningsByDay.length === 0 ? (
+            <div className="text-sm text-slate-500">Sin registros</div>
+          ) : (
+            <div className="space-y-2">
+              {earningsByDay.map(({ label, amount }) => (
+                <div key={label} className="flex items-center justify-between rounded-lg border px-3 py-2">
+                  <span className="text-sm font-medium text-slate-700">{label}</span>
+                  <span className="text-base font-semibold">{fmtCLP.format(amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 text-xs text-slate-500">
+            * $2.000 por cada bloque o fracción de 10 minutos por niño.
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* En curso / Finalizados */}
       <div className="grid md:grid-cols-2 gap-6">
         <Card>
           <CardHeader title="En curso" />
@@ -190,6 +247,7 @@ export default function AdminPanel(){
         </Card>
       </div>
 
+      {/* Historial con paginación */}
       <Card>
         <CardHeader title={`Historial (pág. ${page} de ${totalPages})`} />
         <CardBody>
@@ -224,7 +282,6 @@ export default function AdminPanel(){
               )
             })}
 
-            {/* Controles de paginación */}
             <div className="flex items-center justify-between pt-2">
               <button
                 onClick={goPrev}
